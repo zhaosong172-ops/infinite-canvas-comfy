@@ -413,9 +413,24 @@ func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
 		}
 	}
 	if statusCode > 0 {
+		if detail := upstreamErrorDetail(body); detail != "" {
+			return fmt.Sprintf("AI 接口请求失败：%d %s", statusCode, detail)
+		}
 		return fmt.Sprintf("AI 接口请求失败：%d", statusCode)
 	}
 	return "AI 接口请求失败"
+}
+
+// upstreamErrorDetail 供应商的错误体不是 {error:{message}} 形状时，把原文头部带出来，避免只剩一个状态码。
+func upstreamErrorDetail(body []byte) string {
+	text := strings.Join(strings.Fields(string(body)), " ")
+	if text == "" {
+		return ""
+	}
+	if len(text) > 300 {
+		text = text[:300] + "…"
+	}
+	return text
 }
 
 func redactLargeImages(value *any) {
