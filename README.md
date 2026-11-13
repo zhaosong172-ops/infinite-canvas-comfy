@@ -1,3 +1,5 @@
+> **本仓库是衍生版本**：[tigerowo/infinite-canvas](https://github.com/tigerowo/infinite-canvas) + ComfyUI 多服务端直连 + Windows 便携版。
+> 差异说明见 [UPSTREAM.md](UPSTREAM.md)，Windows 免安装包见 [Releases](https://github.com/zhaosong172-ops/infinite-canvas-comfy/releases)。
 <p align="center">
   <img src="web/public/logo.svg" width="96" alt="infinite-canvas logo">
 </p>
