@@ -64,6 +64,6 @@ Stop-Process -Id $web.Id, $api.Id -Force
 
 ## 用 GitHub Actions 自动发布（可选）
 
-`release-workflow.yml.template` 是等价的工作流，复制到 `.github/workflows/windows-release.yml` 后，推送 `v*` 标签即可自动构建并发布 Release。
+`packaging/github-workflows/windows-release.yml` 是等价的工作流，复制到 `.github/workflows/` 后，推送 `v*` 标签即可自动构建并发布 Release。
 
 注意：通过 API 写入 `.github/workflows/` 需要令牌具备 `workflow` scope，否则 GitHub 会直接返回 404。
