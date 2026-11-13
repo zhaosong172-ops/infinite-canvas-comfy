@@ -22,4 +22,4 @@
 ### 3. 说明
 
 - 上游的 `setup.exe` / `.msi` 由仓库之外的 Tauri 桌面壳构建，本仓库不包含该壳，因此提供的是免安装便携包。
-- `.github/workflows/` 下的上游 CI 工作流暂存于 `packaging/github-workflows/`，启用方式见该目录 README。
+- `.github/workflows/` 里是上游的 CI / 镜像 / Canvas Agent 工作流，另有本仓库新增的 `windows-release.yml`：推 `v*` 标签自动构建并发布 Windows 便携包。

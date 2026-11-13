@@ -62,8 +62,6 @@ Stop-Process -Id $web.Id, $api.Id -Force
 (Get-FileHash "InfiniteCanvas-Windows-x64-<tag>.zip" -Algorithm SHA256).Hash.ToLower()
 ```
 
-## 用 GitHub Actions 自动发布（可选）
+## 用 GitHub Actions 自动发布
 
-`packaging/github-workflows/windows-release.yml` 是等价的工作流，复制到 `.github/workflows/` 后，推送 `v*` 标签即可自动构建并发布 Release。
-
-注意：通过 API 写入 `.github/workflows/` 需要令牌具备 `workflow` scope，否则 GitHub 会直接返回 404。
+`.github/workflows/windows-release.yml` 已配置好：在 Actions 页面手动 `workflow_dispatch` 会构建、冒烟测试并上传 artifact；推送 `v*` 标签还会创建 Release 并上传 zip 与 sha256。
