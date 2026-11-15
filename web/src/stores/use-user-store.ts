@@ -5,6 +5,9 @@ import { persist } from "zustand/middleware";
 
 import { AUTH_TOKEN_KEY, fetchCurrentUser, login, register, type AuthPayload, type AuthUser } from "@/services/api/auth";
 
+import { isPersonalDesktop } from "@/lib/desktop";
+import { saveComfyAgentConnection } from "@/services/api/comfy-local-agent";
+
 type UserStore = {
     token: string;
     user: AuthUser | null;
@@ -27,6 +30,20 @@ export const useUserStore = create<UserStore>()(
             setSession: (token, user) => set({ token, user, isReady: true }),
             clearSession: () => set({ token: "", user: null, isReady: true }),
             hydrateUser: async () => {
+                if (isPersonalDesktop) {
+                    set({ isLoading: true });
+                    try {
+                        const response = await fetch("/desktop/session", { cache: "no-store" });
+                        const result = await response.json();
+                        if (!response.ok || result.code !== 0 || !result.data?.token) throw new Error(result.msg || "个人画布启动失败");
+                        saveComfyAgentConnection(result.agent.endpoint, result.agent.token);
+                        set({ token: result.data.token, user: result.data.user, isReady: true, isLoading: false });
+                    } catch (error) {
+                        set({ isReady: true, isLoading: false });
+                        throw error;
+                    }
+                    return;
+                }
                 const token = get().token;
                 if (!token) {
                     set({ user: null, isReady: true });

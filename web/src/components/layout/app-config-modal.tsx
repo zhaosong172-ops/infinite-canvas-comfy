@@ -2,7 +2,7 @@
 
 import { App, Button, Form, Input, Modal, Radio, Segmented, Select, Switch } from "antd";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
@@ -20,7 +20,8 @@ import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts
 import { isMiniMaxTtsConfig, miniMaxTtsFormatOptions, normalizeMiniMaxTtsFormat, normalizeMiniMaxTtsSpeed, normalizeMiniMaxTtsVoice } from "@/lib/minimax-tts";
 import { miniMaxTtsVoiceOptions } from "@/lib/minimax-tts-voices";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
-import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
+import { grsaiVideoModels, isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions, type ModelChannelProtocol } from "@/lib/model-channel";
+import { parseCCSwitchProviderImport, type CCSwitchProviderImport } from "@/lib/ccswitch-import";
 import { startTokenDanceOAuth } from "@/lib/tokendance-oauth";
 import type { WorkflowChannelData, WorkflowEntry } from "@/lib/workflow-channel";
 import { listWorkflowChannels, readWorkflowChannel, replaceWorkflowChannels, saveWorkflowChannel } from "@/services/workflow-channel-storage";
@@ -52,6 +53,10 @@ export function AppConfigModal() {
     const [loadingModels, setLoadingModels] = useState(false);
     const [savingConfig, setSavingConfig] = useState(false);
     const [modelSelectChannelId, setModelSelectChannelId] = useState("");
+    const [ccSwitchModalOpen, setCCSwitchModalOpen] = useState(false);
+    const [ccSwitchLink, setCCSwitchLink] = useState("");
+    const [ccSwitchPreview, setCCSwitchPreview] = useState<CCSwitchProviderImport[]>([]);
+    const ccSwitchFileRef = useRef<HTMLInputElement>(null);
     const [parameterTranslation, setParameterTranslation] = useState<string>();
     const [workflowEntries, setWorkflowEntries] = useState<WorkflowEntry[]>([]);
     const accountConfigRef = useRef<{ ready: boolean; workflowChannels?: WorkflowChannelData[] }>({ ready: false });
@@ -295,8 +300,51 @@ export function AppConfigModal() {
         updateLocalChannels(normalizeLocalChannels(config).map((channel) => (channel.id === id ? { ...channel, ...patch } : channel)));
     };
 
-    const addLocalChannel = () => {
-        updateLocalChannels([...normalizeLocalChannels(config), { id: "local-" + Date.now(), protocol: "openai", name: "新渠道", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [] }]);
+    const addLocalChannel = (preset: { protocol: ModelChannelProtocol; name: string } = { protocol: "openai", name: "新渠道" }) => {
+        updateLocalChannels([...normalizeLocalChannels(config), { id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, protocol: preset.protocol, name: preset.name, baseUrl: modelChannelDefaultBaseUrls[preset.protocol], apiKey: "", models: [] }]);
+    };
+
+    const closeCCSwitchImport = () => {
+        setCCSwitchModalOpen(false);
+        setCCSwitchLink("");
+        setCCSwitchPreview([]);
+    };
+
+    const previewCCSwitchChannel = (value = ccSwitchLink) => {
+        try {
+            setCCSwitchPreview(parseCCSwitchProviderImport(value));
+            setCCSwitchLink("");
+        } catch (error) {
+            setCCSwitchPreview([]);
+            message.error(error instanceof Error ? error.message : "解析 CC Switch 配置失败");
+        }
+    };
+
+    const importCCSwitchChannel = () => {
+        if (!ccSwitchPreview.length) return;
+        const channels = normalizeLocalChannels(useConfigStore.getState().config);
+        updateLocalChannels([...channels, ...ccSwitchPreview.map((provider) => ({
+            id: "local-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+            protocol: provider.protocol,
+            name: provider.name,
+            baseUrl: provider.baseUrl,
+            apiKey: provider.apiKey,
+            models: provider.models,
+        }))]);
+        const count = ccSwitchPreview.length;
+        closeCCSwitchImport();
+        message.success("已新增 " + count + " 个本地渠道");
+    };
+
+    const readCCSwitchFile = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+        if (file.size > 1_000_000) {
+            message.error("配置文件不能超过 1 MB");
+            return;
+        }
+        previewCCSwitchChannel(await file.text());
     };
 
     const removeLocalChannel = (id: string) => {
@@ -386,7 +434,8 @@ export function AppConfigModal() {
             message.error("请先填写该渠道的 Base URL 和 API Key");
             return;
         }
-        return uniqueModels(await fetchImageModels(configForLocalChannel(config, modelSelectChannel)));
+        const models = await fetchImageModels(configForLocalChannel(config, modelSelectChannel));
+        return uniqueModels(modelSelectChannel.protocol === "grsai" ? [...models, ...grsaiVideoModels] : models);
     };
 
 
@@ -466,9 +515,14 @@ export function AppConfigModal() {
                                         <div className="text-sm font-medium">本地模型渠道</div>
                                         <div className="mt-1 text-xs text-stone-500">可为生图、视频、文本、音频分别选择不同渠道的模型。</div>
                                     </div>
-                                    <Button size="small" onClick={addLocalChannel}>
-                                        新增渠道
-                                    </Button>
+                                    <div className="flex flex-wrap justify-end gap-2">
+                                        <Button size="small" onClick={() => addLocalChannel({ protocol: "deepseek", name: "DeepSeek" })}>DeepSeek</Button>
+                                        <Button size="small" onClick={() => addLocalChannel({ protocol: "grsai", name: "GRSAI 国际版" })}>GRSAI 国际版</Button>
+                                        <Button size="small" onClick={() => addLocalChannel({ protocol: "aa", name: "典名词元（AA）" })}>典名词元（AA）</Button>
+                                        <Button size="small" onClick={() => addLocalChannel({ protocol: "ark", name: "火山方舟" })}>火山方舟</Button>
+                                        <Button size="small" onClick={() => setCCSwitchModalOpen(true)}>导入 CC Switch</Button>
+                                        <Button size="small" onClick={() => addLocalChannel()}>新增渠道</Button>
+                                    </div>
                                 </div>
                                 {normalizeLocalChannels(config).map((channel, index) => (
                                     <div key={channel.id} className="space-y-2 rounded-md bg-stone-50 p-2 dark:bg-stone-900">
@@ -679,6 +733,22 @@ export function AppConfigModal() {
                     ) : null}
                 </Form>
             </div>
+            </Modal>
+            <Modal
+                title="导入 CC Switch 渠道"
+                open={ccSwitchModalOpen}
+                width={560}
+                onCancel={closeCCSwitchImport}
+                destroyOnHidden
+                footer={<div className="flex justify-end gap-2"><Button onClick={closeCCSwitchImport}>取消</Button><Button onClick={() => previewCCSwitchChannel()}>解析配置</Button><Button type="primary" disabled={!ccSwitchPreview.length} onClick={importCCSwitchChannel}>添加本地渠道</Button></div>}
+            >
+                <div className="space-y-3">
+                    <p className="text-sm text-stone-500">可粘贴 CC Switch 服务商分享链接，或选择含 OpenAI Chat 服务商的 JSON 配置。暂不支持 Responses、Anthropic、Gemini 配置和 CC Switch SQL 全量备份。导入只会新增本地渠道，不覆盖现有配置。</p>
+                    <Input.TextArea rows={4} value={ccSwitchLink} placeholder="粘贴 ccswitch:// 链接或 JSON 配置" onChange={(event) => { setCCSwitchLink(event.target.value); setCCSwitchPreview([]); }} />
+                    <input ref={ccSwitchFileRef} type="file" accept=".json,application/json" className="hidden" onChange={readCCSwitchFile} />
+                    <Button size="small" onClick={() => ccSwitchFileRef.current?.click()}>选择 JSON 文件</Button>
+                    {ccSwitchPreview.length ? <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-stone-200 p-3 text-sm dark:border-stone-800">{ccSwitchPreview.map((provider, index) => <div key={provider.baseUrl + "-" + index} className="space-y-1 border-b border-stone-100 pb-2 last:border-0 last:pb-0 dark:border-stone-800"><div><span className="text-stone-500">名称：</span>{provider.name}</div><div><span className="text-stone-500">类型：</span>{modelChannelProtocolOptions.find((option) => option.value === provider.protocol)?.label || provider.protocol}</div><div className="break-all"><span className="text-stone-500">接口：</span>{provider.baseUrl}</div><div><span className="text-stone-500">模型：</span>{provider.models.join("、") || "未指定，导入后可拉取或手动添加"}</div><div><span className="text-stone-500">API Key：</span>{provider.apiKey ? "已包含，将保存在本机浏览器" : "未包含，导入后需手动填写"}</div></div>)}</div> : null}
+                </div>
             </Modal>
             {modelSelectChannel && isWorkflowProtocol(modelSelectChannel.protocol) ? (
                 <Modal title={`${modelSelectChannel.name || "工作流渠道"} · ${modelSelectChannel.protocol === "runninghub" ? "RunningHub" : "ComfyUI"} 工作流`} open width="75vw" centered onCancel={finishWorkflowChannel} footer={<Button type="primary" onClick={finishWorkflowChannel}>完成</Button>} styles={{ body: { maxHeight: "76vh", overflowY: "auto" } }}>

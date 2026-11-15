@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const bridgeOutputAddress = "127.0.0.1:8189"
+var bridgeOutputAddress = "127.0.0.1:8189"
 
 type localOutput struct {
 	ResultID  string `json:"resultId"`
@@ -56,10 +56,15 @@ func newLocalOutputID() (string, error) {
 }
 
 func startOutputServer(options bridgeOptions, store *recoveryStore) error {
-	listener, err := net.Listen("tcp", bridgeOutputAddress)
+	address := fmt.Sprintf("127.0.0.1:%d", options.OutputPort)
+	listener, err := net.Listen("tcp", address)
+	if err != nil && options.OutputPort != 0 {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+	}
 	if err != nil {
 		return err
 	}
+	bridgeOutputAddress = listener.Addr().String()
 	mux := http.NewServeMux()
 	serve := func(w http.ResponseWriter, r *http.Request) {
 		serveLocalOutput(w, r, options, store)
@@ -163,6 +168,9 @@ func serveLocalOutput(
 	if err != nil {
 		http.Error(w, "本地结果地址无效", http.StatusInternalServerError)
 		return
+	}
+	if apiKey := strings.TrimSpace(os.Getenv("COMFY_API_KEY")); apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for _, name := range []string{"Range", "If-Range"} {
 		if value := r.Header.Get(name); value != "" {

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -138,6 +139,9 @@ func uploadComfyMedia(comfy, name, mimeType string, data []byte) (string, error)
 		return "", err
 	}
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if apiKey := strings.TrimSpace(os.Getenv("COMFY_API_KEY")); apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	response, err := comfyHTTP.Do(request)
 	if err != nil {
 		return "", err
@@ -302,7 +306,7 @@ func collectOutputItems(value any, forcedKind string, output *[]outputItem) {
 	for key, child := range item {
 		kind := ""
 		switch key {
-		case "videos":
+		case "video", "videos", "video_output":
 			kind = "video"
 		case "audio", "audios":
 			kind = "audio"

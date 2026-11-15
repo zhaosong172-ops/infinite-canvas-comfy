@@ -22,6 +22,43 @@ func RunningHubInspect(w http.ResponseWriter, r *http.Request) {
 	OK(w, entry)
 }
 
+func RunningHubTemplates(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		BaseURL string `json:"baseUrl"`
+		Search  string `json:"search"`
+		Page    int    `json:"page"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		Fail(w, "请求参数无效")
+		return
+	}
+	items, err := service.ListRunningHubTemplates(r.Context(), request.BaseURL, request.Search, request.Page)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, items)
+}
+
+func AdminRunningHubTemplates(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Index   *int               `json:"index"`
+		Channel model.ModelChannel `json:"channel"`
+		Search  string             `json:"search"`
+		Page    int                `json:"page"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		Fail(w, "请求参数无效")
+		return
+	}
+	items, err := service.ListAdminRunningHubTemplates(r.Context(), request.Index, request.Channel, request.Search, request.Page)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, items)
+}
+
 func AdminRunningHubInspect(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Index   *int                           `json:"index"`

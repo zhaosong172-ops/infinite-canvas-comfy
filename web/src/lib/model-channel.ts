@@ -1,5 +1,8 @@
 export const modelChannelProtocols = [
     { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com" },
+    { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", apiKeyUrl: "https://platform.deepseek.com/api_keys" },
+    { value: "grsai", label: "GRSAI 国际版", baseUrl: "https://grsaiapi.com" },
+    { value: "aa", label: "典名词元（AA）", baseUrl: "https://api.aa.com.cn" },
     { value: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com" },
     { value: "grok2api", label: "Grok2API", baseUrl: "" },
     { value: "minimax", label: "MiniMax & METASO", baseUrl: "https://metaso.cn/api/minimax", apiKeyUrl: "https://metaso.cn/minimax-h3/?s=tt" },
@@ -13,6 +16,8 @@ export const modelChannelProtocols = [
     { value: "kie", label: "KIE", baseUrl: "https://api.kie.ai/api/v1", directRequestPlan: true },
     { value: "mimo", label: "MiMo", baseUrl: "https://api.xiaomimimo.com", apiKeyUrl: "https://platform.xiaomimimo.com/?ref=JFZQR2" },
 ] as const;
+
+export const grsaiVideoModels = ["wan-3.0", "minimax-h3", "agnes-video-2.5"] as const;
 
 export type ModelChannelProtocol = (typeof modelChannelProtocols)[number]["value"];
 export type DirectAIProvider = Extract<(typeof modelChannelProtocols)[number], { directRequestPlan: true }>["value"];

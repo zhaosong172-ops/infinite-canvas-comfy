@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { App } from "antd";
 
@@ -12,8 +12,14 @@ import { defaultConfig, useConfigStore, type AiConfig } from "@/stores/use-confi
 import { useUserStore } from "@/stores/use-user-store";
 import { useChannelTranslationStore } from "@/stores/use-channel-translation-store";
 
+import { initializeDesktopFetch, isPersonalDesktop } from "@/lib/desktop";
+
+initializeDesktopFetch();
+
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
+    const [personalReady, setPersonalReady] = useState(!isPersonalDesktop);
+    const [personalError, setPersonalError] = useState("");
     const handledConfigParams = useRef(false);
     const pathname = usePathname();
     const token = useUserStore((state) => state.token);
@@ -43,7 +49,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [loadPublicSettings]);
 
     useEffect(() => {
-        if (!isLoginPage) void hydrateUser();
+        if (!isLoginPage || isPersonalDesktop) void hydrateUser().then(() => setPersonalReady(true)).catch((error) => setPersonalError(error instanceof Error ? error.message : "本机服务连接失败"));
     }, [hydrateUser, isLoginPage]);
 
 	useEffect(() => {
@@ -143,5 +149,6 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         openConfigDialog(false);
     }, [message, openConfigDialog, publicSettings, updateConfig]);
 
+    if (!personalReady) return <div className="flex h-screen items-center justify-center text-sm text-[var(--ant-color-text)]">{personalError ? <div>{personalError} <button className="underline" onClick={() => window.location.reload()}>重试</button></div> : "正在启动个人画布…"}</div>;
     return <>{children}</>;
 }

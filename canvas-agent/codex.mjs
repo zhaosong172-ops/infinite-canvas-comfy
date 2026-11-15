@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 
 const require = createRequire(import.meta.url);
-const binary = join(dirname(require.resolve("@openai/codex/package.json")), "bin/codex.js");
+
 
 export class CodexClient {
     pending = new Map();
@@ -13,6 +13,9 @@ export class CodexClient {
     stopped = false;
 
     constructor(emit) {
+        let binary;
+        try { binary = join(dirname(require.resolve("@openai/codex/package.json")), "bin/codex.js"); }
+        catch { throw new Error("此测试版未内置 Codex 命令行；可使用已配置的模型渠道，或单独安装 Codex 后使用外部 Canvas Agent"); }
         this.emit = emit;
         this.child = spawn(process.execPath, [binary, "app-server", "--disable", "image_generation"], {
             stdio: ["pipe", "pipe", "pipe"],

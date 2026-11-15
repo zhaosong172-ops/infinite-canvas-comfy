@@ -25,6 +25,53 @@ func TestResolveWorkflowFieldsRequiredPrompt(t *testing.T) {
 	}
 }
 
+func TestResolveWorkflowFieldsAllowsLegacyOptionalNegativePrompt(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{
+		Provider:   "comfyui",
+		Capability: "image",
+		Fields: []model.WorkflowFieldMapping{{
+			NodeID:    "4",
+			FieldName: "negative_prompt",
+			Source:    "negativePrompt",
+			Enabled:   &enabled,
+		}},
+		WorkflowJSON: map[string]any{
+			"4": map[string]any{"inputs": map[string]any{"negative_prompt": ""}},
+		},
+	}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{Prompt: "a landscape"})
+	if err != nil {
+		t.Fatalf("legacy optional negative prompt must not block submission: %v", err)
+	}
+	if len(values) != 0 {
+		t.Fatalf("missing negative prompt must not create an empty override: %#v", values)
+	}
+}
+
+func TestResolveWorkflowFieldsNormalizesLegacyNegativePromptSource(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{
+		Provider:   "comfyui",
+		Capability: "image",
+		Fields: []model.WorkflowFieldMapping{{
+			NodeID:    "4",
+			FieldName: "negative_prompt",
+			Source:    "negative_prompt",
+			Enabled:   &enabled,
+		}},
+		WorkflowJSON: map[string]any{
+			"4": map[string]any{"inputs": map[string]any{"negative_prompt": ""}},
+		},
+	}
+	values, err := ResolveWorkflowFields(entry, WorkflowRunInput{
+		FieldValues: map[string]any{"source:negativePrompt": "blurry"},
+	})
+	if err != nil || len(values) != 1 || values[0].Value != "blurry" {
+		t.Fatalf("legacy source name should map to negative prompt: values=%#v err=%v", values, err)
+	}
+}
+
 func TestResolveWorkflowFieldsMediaCannotBeReplacedByFieldValue(t *testing.T) {
 	enabled := true
 	entry := model.WorkflowEntry{Fields: []model.WorkflowFieldMapping{{NodeID: "1", FieldName: "image", Source: "referenceImage", Enabled: &enabled}}}

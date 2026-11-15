@@ -12,7 +12,7 @@ export function isAgnesVideoV25Model(modelName: string) {
 
 export function isWan3VideoModel(modelName: string) {
     const model = modelKey(modelName);
-    return model === "wan3-0-video" || model === "wan3-0-video-prime";
+    return model === "wan-3-0" || model === "wan3-0-video" || model === "wan3-0-video-prime";
 }
 
 export const COGVIDEOX3_DURATIONS = ["5", "10"] as const;
@@ -24,6 +24,9 @@ export function normalizeCogVideoX3Duration(value: string) {
 
 export function videoDurationOptionsForModel(modelName: string) {
     const model = modelKey(modelName);
+    if (model === "wan-3-0") return Array.from({ length: 29 }, (_, index) => index + 2);
+    if (model === "minimax-h3") return Array.from({ length: 15 }, (_, index) => index + 1);
+    if (model === "agnes-video-2-5") return Array.from({ length: 9 }, (_, index) => index + 4);
     if (model.includes("wan3")) return [-1, ...Array.from({ length: 29 }, (_, index) => index + 2)];
     if (model.includes("sora-2")) return [4, 8, 12, 16, 20];
     if (model.includes("veo3-1") || model.includes("veo-3-1")) return [4, 6, 8];

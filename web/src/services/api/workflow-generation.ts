@@ -99,7 +99,7 @@ export function comfyOutputStorageKey(url: string) {
     try {
         const parsed = new URL(url);
         const match = parsed.pathname.match(/^\/outputs\/([a-f\d]{16,64})$/i);
-        if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || parsed.port !== "8189" || !match) return "";
+        if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || !parsed.port || !match) return "";
         return `comfy:${match[1]}`;
     } catch {
         return "";
@@ -134,7 +134,9 @@ export async function workflowMediaSource(url: string, ref?: WorkflowRef, provid
     if (!response.ok) throw new Error(`读取工作流素材失败：${response.status}`);
     const blob = await response.blob();
     if (comfyVideo) {
-        const uploaded = await fetch("http://127.0.0.1:8189/upload", { method: "POST", headers: { "Content-Type": blob.type || "video/mp4" }, body: blob });
+        const source = new URL(url);
+        if (source.protocol !== "http:" || source.hostname !== "127.0.0.1" || !/^\/outputs\/[a-f\d]{16,64}$/i.test(source.pathname)) throw new Error("ComfyUI 参考视频不是本机 Bridge 产物");
+        const uploaded = await fetch(`${source.origin}/upload`, { method: "POST", headers: { "Content-Type": blob.type || "video/mp4" }, body: blob });
         const filename = await uploaded.text();
         if (!uploaded.ok) throw new Error(filename || "ComfyUI 参考视频上传失败");
         return filename;

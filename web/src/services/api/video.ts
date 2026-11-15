@@ -10,6 +10,7 @@ import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, gemini
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "./protocols/kling-models";
+import { grsaiVideoGenerateUrl, grsaiVideoResultUrl, normalizeGrsaiVideoTask, readGrsaiVideoError } from "./protocols/grsai-video";
 import { autoDLBaseUrl, getAutoDLCapabilities } from "@/lib/autodl";
 import { fetchAutoDLWorkflow } from "./autodl";
 import { isAgnesVideoV25Model, isCogVideoX3Model, isWan3VideoModel, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration, videoDurationOptionsForModel } from "@/lib/video-model-capabilities";
@@ -42,7 +43,8 @@ export class VideoRequestError extends Error {
 
 function usesAccountProxy(config: AiConfig) {
     const token = useUserStore.getState().token;
-    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
+    const localGrsaiVideo = config.channelMode === "local" && isGrsaiVideoConfig(config, config.model || config.videoModel);
+    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token) && !localGrsaiVideo);
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -52,6 +54,10 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
+    if (!usesAccountProxy(config) && isGrsaiVideoConfig(config, model)) {
+        const channel = localChannelForActiveModel({ ...config, model, videoModel: model });
+        return grsaiVideoResultUrl(channel?.baseUrl || config.baseUrl, id);
+    }
     if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = localChannelForActiveModel(config);
         return geminiOperationUrl(channel?.baseUrl || config.baseUrl, id);
@@ -117,6 +123,9 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
     const model = config.model || config.videoModel;
+    if (config.channelMode === "remote" && isGrsaiVideoConfig(config, model)) {
+        throw new VideoRequestError("GRSAI 视频请添加为本地渠道后使用");
+    }
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
     const createOptions = normalizeVideoTaskCreateOptions(options);
     const draft = !createOptions.draftTaskId && config.videoMode === "draft" && (modelKey(model).includes("seedance-2-5") || modelKey(model).includes("seedance2-5") || modelKey(model).includes("sd2-5"));
@@ -148,6 +157,8 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         const channel = localChannelForActiveModel(config);
         const createUrl = !accountProxy && isGeminiConfig(config, model)
             ? geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "predictLongRunning")
+            : !accountProxy && isGrsaiVideoConfig(config, model)
+                ? grsaiVideoGenerateUrl(channel?.baseUrl || config.baseUrl)
             : !accountProxy && isMiniMaxH3Config(config, model)
                 ? miniMaxApiUrl(config, "/v2/video_generation")
                 : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
@@ -156,7 +167,9 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         if (accountProxy) createOptions.onServerTask?.();
         const created = directProvider
             ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body, createOptions.signal)
-            : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers, signal: accountProxy ? undefined : createOptions.signal })).data);
+            : isGrsaiVideoConfig(config, model)
+                ? normalizeGrsaiVideoTask((await axios.post(createUrl, requestBody, { headers: { ...headers, "Content-Type": "application/json" }, signal: createOptions.signal })).data, "", model) as VideoResponse
+                : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers, signal: accountProxy ? undefined : createOptions.signal })).data);
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         refreshRemoteUser(config);
         const task = { ...await syncGeneratedVideo(created, config), draft, draft_task_id: draft ? created.task_id || created.id : undefined };
@@ -357,6 +370,10 @@ function isGrok2APIVideoConfig(config: AiConfig, model: string) {
     return (normalizedModel === "grok-imagine-video" || normalizedModel === "grok-imagine-video-1.5") && videoChannelProtocol(config, model) === "grok2api";
 }
 
+function isGrsaiVideoConfig(config: AiConfig, model: string) {
+    return videoChannelProtocol(config, model) === "grsai" && ["wan-3-0", "minimax-h3", "agnes-video-2-5"].includes(modelKey(model));
+}
+
 export async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoResponse, contentRequest?: RequestInit, contentResponse?: Response) {
     const url = task.video_url || task.url || "";
     const needsTaskContent = !url && ("object" in task && task.object === "video");
@@ -415,6 +432,7 @@ async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, p
 }
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    if (isGrsaiVideoConfig(config, model)) return createGrsaiVideoRequestBody(config, model, prompt, input);
     if (videoChannelProtocol(config, model) === "autodl") {
         const capabilities = getAutoDLCapabilities(await fetchAutoDLWorkflow(autoDLBaseUrl(config, model), model));
         if (!capabilities) throw new VideoRequestError("当前 AutoDL 工作流尚未适配");
@@ -522,6 +540,43 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map(mediaReferenceToFormValue));
     audioFiles.forEach((file) => body.append("audio_reference[]", file));
     return body;
+}
+
+async function createGrsaiVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    if (input.videoReferences.length) throw new VideoRequestError("GRSAI 视频模型暂不支持参考视频");
+    const hasFrames = Boolean(input.firstFrame || input.lastFrame);
+    if (hasFrames && (input.references.length || input.audioReferences.length)) {
+        throw new VideoRequestError("GRSAI 首尾帧不能与普通参考图片或音频同时使用");
+    }
+    const normalizedModel = modelKey(model);
+    const maxImages = normalizedModel === "minimax-h3" ? 9 : 10;
+    const maxAudios = normalizedModel === "minimax-h3" ? 3 : 5;
+    if (input.references.length > maxImages || input.audioReferences.length > maxAudios) {
+        throw new VideoRequestError(`GRSAI 当前模型最多支持 ${maxImages} 张参考图和 ${maxAudios} 段参考音频`);
+    }
+    const images = await Promise.all(input.references.map(imageToAgnesReference));
+    const audios = await Promise.all(input.audioReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference))));
+    const duration = Math.floor(Number(config.videoSeconds) || 6);
+    const h3 = normalizedModel === "minimax-h3";
+    const agnes = isAgnesVideoV25Model(model);
+    const normalizedDuration = h3 ? Math.max(1, Math.min(normalizeVideoResolution(config.vquality) === "1080p" ? 10 : 15, duration))
+        : agnes ? Math.max(4, Math.min(12, duration))
+        : Math.max(2, Math.min(30, duration));
+    const aspectRatio = normalizeSeedanceRatio(config.size);
+    const resolution = h3 ? normalizeMiniMaxH3Resolution(config.vquality).toLowerCase() : normalizeVideoResolution(config.vquality);
+    return {
+        prompt,
+        model,
+        resolution,
+        duration: normalizedDuration,
+        aspectRatio: aspectRatio === "adaptive" ? "16:9" : aspectRatio,
+        replyType: "async",
+        ...(h3 ? { promptSkill: true } : {}),
+        ...(images.length ? { images } : {}),
+        ...(audios.length ? { audios } : {}),
+        ...(input.firstFrame ? { firstFrame: await imageToAgnesReference(input.firstFrame) } : {}),
+        ...(input.lastFrame ? { lastFrame: await imageToAgnesReference(input.lastFrame) } : {}),
+    };
 }
 
 async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {

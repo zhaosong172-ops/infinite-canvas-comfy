@@ -11,8 +11,19 @@ export type RunningHubInspectInput = {
     capability: WorkflowCapability;
 };
 
+export type RunningHubTemplate = {
+    workflowId: string;
+    title: string;
+    description: string;
+    author: string;
+    useCount: string;
+    labels: string;
+};
+
+export function searchRunningHubTemplates(token: string, input: { baseUrl: string; search: string; page?: number }, admin?: { index?: number; channel: AdminModelChannel }) {
+    return admin ? apiPost<RunningHubTemplate[]>("/api/admin/workflow-providers/runninghub/templates", { ...admin, ...input }, token) : apiPost<RunningHubTemplate[]>("/api/v1/workflow-providers/runninghub/templates", input, token);
+}
+
 export function inspectRunningHub(token: string, input: RunningHubInspectInput, admin?: { index?: number; channel: AdminModelChannel }) {
-    return admin
-        ? apiPost<WorkflowEntry>("/api/admin/workflow-providers/runninghub/inspect", { ...admin, input }, token)
-        : apiPost<WorkflowEntry>("/api/v1/workflow-providers/runninghub/inspect", input, token);
+    return admin ? apiPost<WorkflowEntry>("/api/admin/workflow-providers/runninghub/inspect", { ...admin, input }, token) : apiPost<WorkflowEntry>("/api/v1/workflow-providers/runninghub/inspect", input, token);
 }

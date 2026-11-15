@@ -87,6 +87,18 @@ func resolveWorkflowForUser(user model.AuthUser, ref WorkflowRef, requireEntry b
 		if !requireEntry {
 			return ResolvedWorkflow{Channel: channel, OwnerScope: ownerScope, OwnerID: ownerID}, nil
 		}
+		hasRequestedWorkflow := false
+		for _, candidate := range channel.Workflows {
+			if candidate.Kind == ref.Kind && candidate.WorkflowID == ref.WorkflowID {
+				hasRequestedWorkflow = true
+				break
+			}
+		}
+		if channel.Protocol == "comfyui" && ref.Kind == "workflow" && !hasRequestedWorkflow {
+			if builtin, ok := directBuiltinWorkflow(ref.WorkflowID); ok {
+				channel.Workflows = append(channel.Workflows, builtin)
+			}
+		}
 		for _, entry := range channel.Workflows {
 			if entry.Kind != ref.Kind || entry.WorkflowID != ref.WorkflowID {
 				continue
@@ -104,9 +116,13 @@ func resolveWorkflowForUser(user model.AuthUser, ref WorkflowRef, requireEntry b
 				if entry.Kind != "workflow" {
 					return ResolvedWorkflow{}, errors.New("ComfyUI 只支持 Workflow 类型")
 				}
-				bridge, err := repository.GetComfyBridge(channel.BridgeID)
-				if err != nil || !bridge.Enabled || bridge.OwnerScope != ownerScope || bridge.OwnerID != ownerID {
-					return ResolvedWorkflow{}, errors.New("ComfyUI Bridge 不存在或无权使用")
+				if strings.TrimSpace(channel.BridgeID) != "" {
+					bridge, err := repository.GetComfyBridge(channel.BridgeID)
+					if err != nil || !bridge.Enabled || bridge.OwnerScope != ownerScope || bridge.OwnerID != ownerID {
+						return ResolvedWorkflow{}, errors.New("ComfyUI Bridge 不存在或无权使用")
+					}
+				} else if strings.TrimSpace(channel.ComfyURL) == "" {
+					return ResolvedWorkflow{}, errors.New("ComfyUI 地址未配置")
 				}
 			}
 			return ResolvedWorkflow{Channel: channel, Entry: entry, OwnerScope: ownerScope, OwnerID: ownerID}, nil

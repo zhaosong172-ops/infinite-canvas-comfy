@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/handler"
@@ -13,8 +14,10 @@ func main() {
 	if err := config.Load(); err != nil {
 		log.Fatal(err)
 	}
-	if err := service.EnsureDefaultAdmin(); err != nil {
-		log.Fatal(err)
+	if config.Cfg.PersonalSecret == "" {
+		if err := service.EnsureDefaultAdmin(); err != nil {
+			log.Fatal(err)
+		}
 	}
 	if err := service.EnsureDefaultAgentSkills(); err != nil {
 		log.Fatal(err)
@@ -23,5 +26,5 @@ func main() {
 	service.StartCanvasProjectCleanupScheduler()
 	handler.StartVideoTaskPoller()
 	service.WakeComfyBridgePoller()
-	log.Fatal(router.New().Run(":" + config.Cfg.Port))
+	log.Fatal(router.New().Run(net.JoinHostPort(config.Cfg.ListenHost, config.Cfg.Port)))
 }

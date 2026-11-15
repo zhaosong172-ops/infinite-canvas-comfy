@@ -1,0 +1,54 @@
+{
+  "name": "infinite-canvas-personal",
+  "version": "0.1.7",
+  "description": "个人无限画布 Windows 测试版",
+  "author": "Personal Canvas",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "node build.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.0",
+    "playwright": "^1.65.1"
+  },
+  "build": {
+    "appId": "local.infinitecanvas.personal",
+    "productName": "InfiniteCanvas Personal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "payload",
+        "to": "app-runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "artifactName": "InfiniteCanvas-Personal-${version}-Windows-x64.${ext}",
+    "portable": {
+      "requestExecutionLevel": "user",
+      "unpackDirName": true,
+      "splashImage": "assets/starting.bmp"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "npmRebuild": false
+  }
+}

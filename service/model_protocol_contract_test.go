@@ -14,7 +14,7 @@ import (
 )
 
 func TestModelProtocolAuthContract(t *testing.T) {
-	for _, protocol := range []string{"", "openai", " GEMINI ", "grok2api", "minimax", "apimart", "kie", "mimo", " AUTODL ", "ark", "unknown"} {
+	for _, protocol := range []string{"", "openai", "deepseek", "grsai", " GEMINI ", "grok2api", "minimax", "apimart", "kie", "mimo", " AUTODL ", "ark", "aa", "unknown"} {
 		request := httptest.NewRequest(http.MethodPost, "https://upstream.invalid", nil)
 		request.Header.Set("Authorization", "existing authorization")
 		request.Header.Set("x-goog-api-key", "existing google key")
@@ -30,6 +30,21 @@ func TestModelProtocolAuthContract(t *testing.T) {
 		if request.Header.Get("Authorization") != wantAuthorization || request.Header.Get("x-goog-api-key") != wantGoogle {
 			t.Errorf("%q auth changed: %v", protocol, request.Header)
 		}
+	}
+}
+
+func TestAAChannelDiscoveryUsesOpenAIModelsEndpoint(t *testing.T) {
+	calls := 0
+	stubProtocolAdminHTTP(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/models" || request.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("unexpected AA model discovery request: %s %s %v", request.Method, request.URL, request.Header)
+		}
+		return protocolAdminResponse("{\"data\":[{\"id\":\"aa-chat\"}]}"), nil
+	})
+	got, err := AdminChannelModels(nil, model.ModelChannel{Protocol: "aa", BaseURL: "https://api.aa.com.cn", APIKey: "test-key"})
+	if err != nil || !reflect.DeepEqual(got, []string{"aa-chat"}) || calls != 1 {
+		t.Fatalf("AA model discovery got %v, %v, %d calls", got, err, calls)
 	}
 }
 
@@ -117,6 +132,7 @@ func TestModelProtocolGenerationTestPrecedence(t *testing.T) {
 		{"MiMo before Gemini", "gemini", "mimo-v2.5-tts", "/chat/completions", "Bearer test-key", "", `{"choices":[{"message":{"audio":{"data":"AAAA"}}}]}`},
 		{"Gemini text", "gemini", "gemini-text", "/v1beta/models/gemini-text:generateContent", "", "test-key", `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`},
 		{"compatible text", "openai", "text-model", "/v1/chat/completions", "Bearer test-key", "", `{"choices":[{"message":{"content":"ok"}}]}`},
+		{"AA compatible text", "aa", "text-model", "/api/v1/chat/completions", "Bearer test-key", "", `{"choices":[{"message":{"content":"ok"}}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

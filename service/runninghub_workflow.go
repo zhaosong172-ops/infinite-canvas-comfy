@@ -25,6 +25,74 @@ type RunningHubInspectInput struct {
 	Capability string `json:"capability"`
 }
 
+type RunningHubTemplate struct {
+	WorkflowID  string `json:"workflowId"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Author      string `json:"author"`
+	UseCount    string `json:"useCount"`
+	Labels      string `json:"labels"`
+}
+
+func ListRunningHubTemplates(ctx context.Context, baseURL, search string, page int) ([]RunningHubTemplate, error) {
+	root, err := runningHubBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	search = strings.TrimSpace(search)
+	if len(search) > 100 {
+		return nil, errors.New("搜索词不能超过 100 个字符")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > 1000 {
+		return nil, errors.New("页码超出范围")
+	}
+	var response map[string]any
+	if err := runningHubRequest(ctx, root+"/api/portal/template/list", map[string]any{"size": 30, "current": page, "search": search, "tags": []any{}, "sort": ""}, &response, nil); err != nil {
+		return nil, fmt.Errorf("搜索 RunningHub 工作流失败：%w", err)
+	}
+	if code, ok := runningHubResponseCode(response); ok && code != 0 {
+		return nil, fmt.Errorf("搜索 RunningHub 工作流失败：%s", runningHubResponseMessage(response))
+	}
+	return parseRunningHubTemplates(response)
+}
+
+func parseRunningHubTemplates(response map[string]any) ([]RunningHubTemplate, error) {
+	data, _ := response["data"].(map[string]any)
+	records, ok := data["records"].([]any)
+	if !ok {
+		return nil, errors.New("invalid RunningHub directory response")
+	}
+	items := make([]RunningHubTemplate, 0, len(records))
+	for _, raw := range records {
+		record, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		owner, _ := record["owner"].(map[string]any)
+		stats, _ := record["statisticsInfo"].(map[string]any)
+		items = append(items, RunningHubTemplate{
+			WorkflowID: stringValue(record["id"]), Title: stringValue(record["name"]),
+			Description: stringValue(record["desc"]), Author: stringValue(owner["name"]),
+			UseCount: stringValue(stats["useCount"]), Labels: stringValue(record["labels"]),
+		})
+	}
+	return items, nil
+}
+
+func ListAdminRunningHubTemplates(ctx context.Context, index *int, channel model.ModelChannel, search string, page int) ([]RunningHubTemplate, error) {
+	if channel.Protocol != "runninghub" {
+		return nil, errors.New("渠道不是 RunningHub")
+	}
+	resolved, err := resolveAdminChannel(index, channel)
+	if err != nil {
+		return nil, err
+	}
+	return ListRunningHubTemplates(ctx, resolved.BaseURL, search, page)
+}
+
 func InspectAdminRunningHub(ctx context.Context, index *int, channel model.ModelChannel, input RunningHubInspectInput) (model.WorkflowEntry, error) {
 	if channel.Protocol != "runninghub" {
 		return model.WorkflowEntry{}, errors.New("渠道不是 RunningHub")

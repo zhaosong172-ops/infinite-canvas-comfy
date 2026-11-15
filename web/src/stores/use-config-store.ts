@@ -346,6 +346,7 @@ export function modelMatchesCapability(model: string, capability?: ModelCapabili
         if (capability === "audio") return model === "indextts2-v1";
         return capability === "video" && (model.startsWith("minimax_h3_") || model === "wan2.2animate-v4-motion_retargeting");
     }
+    if (protocol === "grsai" && ["wan-3.0", "minimax-h3"].includes(model.toLowerCase())) return capability === "video";
     if (protocol === "gemini") {
         const value = model.toLowerCase();
         const video = /^models\/veo-|^veo-/.test(value);

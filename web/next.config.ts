@@ -20,6 +20,7 @@ export default function nextConfig(phase: string): NextConfig {
             ignoreBuildErrors: true,
         },
         env: {
+            NEXT_PUBLIC_PERSONAL_DESKTOP: process.env.PERSONAL_DESKTOP || "0",
             NEXT_PUBLIC_APP_VERSION: localVersion,
             NEXT_PUBLIC_APP_RELEASES: JSON.stringify(releases),
         },

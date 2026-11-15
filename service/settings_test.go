@@ -43,8 +43,8 @@ func TestFetchAdminChannelModelsReportsArkPlanModelsUnsupported(t *testing.T) {
 
 	_, err := fetchAdminChannelModels(model.ModelChannel{
 		Protocol: "ark",
-		BaseURL: server.URL + "/api/plan/v3/contents/generations/tasks",
-		APIKey:  "test-key",
+		BaseURL:  server.URL + "/api/plan/v3/contents/generations/tasks",
+		APIKey:   "test-key",
 	})
 	if err == nil {
 		t.Fatal("expected unsupported /models error")
@@ -59,6 +59,21 @@ func TestBuildModelChannelURLNormalizesArkPlanTaskPath(t *testing.T) {
 	want := "https://ark.cn-beijing.volces.com/api/plan/v3/models"
 	if got != want {
 		t.Fatalf("BuildModelChannelURL = %q, want %q", got, want)
+	}
+}
+
+func TestBuildAAChannelURL(t *testing.T) {
+	tests := []struct{ baseURL, path, want string }{
+		{"https://api.aa.com.cn", "/chat/completions", "https://api.aa.com.cn/api/v1/chat/completions"},
+		{"https://api.aa.com.cn/api", "/models", "https://api.aa.com.cn/api/v1/models"},
+		{"https://api.aa.com.cn/api/v1", "/models", "https://api.aa.com.cn/api/v1/models"},
+		{"https://api.aa.com.cn/api/v1/chat/completions", "/chat/completions", "https://api.aa.com.cn/api/v1/chat/completions"},
+	}
+	for _, tt := range tests {
+		got := BuildModelChannelURL(model.ModelChannel{Protocol: "aa", BaseURL: tt.baseURL}, tt.path)
+		if got != tt.want {
+			t.Errorf("BuildModelChannelURL(%q, %q) = %q, want %q", tt.baseURL, tt.path, got, tt.want)
+		}
 	}
 }
 

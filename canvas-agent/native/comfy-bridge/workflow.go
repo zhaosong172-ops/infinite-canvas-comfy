@@ -699,6 +699,8 @@ func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]str
 		delete(workflow, nodeID)
 	}
 	if len(removed) == 0 {
+		normalizeMiniMaxH3ReferencePrompt(workflow)
+		normalizeMiniMaxH3VideoOutput(workflow)
 		return nil
 	}
 	for _, rawNode := range workflow {
@@ -717,7 +719,77 @@ func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]str
 			}
 		}
 	}
+	normalizeMiniMaxH3ReferencePrompt(workflow)
+	normalizeMiniMaxH3VideoOutput(workflow)
 	return nil
+}
+
+// MiniMax H3 identifies reference inputs in the prompt itself. The canvas
+// exposes ordinary prompt text, so add the tags for active reference slots
+// when the user has not already supplied them.
+func normalizeMiniMaxH3ReferencePrompt(workflow jsonMap) {
+	for _, raw := range workflow {
+		node, ok := mapValue(raw)
+		if !ok || stringValue(node["class_type"]) != "MiniMaxH3ReferenceToVideo" {
+			continue
+		}
+		inputs, ok := mapValue(node["inputs"])
+		if !ok {
+			continue
+		}
+		prompt := strings.TrimSpace(stringValue(inputs["prompt"]))
+		if prompt == "" {
+			continue
+		}
+		tags := make([]string, 0, 3)
+		if count := activeH3ReferenceSlots(inputs, "ref_images.ref_image_"); count > 0 && !strings.Contains(strings.ToLower(prompt), "<picture ") {
+			tags = append(tags, numberedH3Tags("Picture", count)...)
+		}
+		if count := activeH3ReferenceSlots(inputs, "ref_videos.ref_video_"); count > 0 && !strings.Contains(strings.ToLower(prompt), "<video ") {
+			tags = append(tags, numberedH3Tags("Video", count)...)
+		}
+		if count := activeH3ReferenceSlots(inputs, "ref_audios.ref_audio_"); count > 0 && !strings.Contains(strings.ToLower(prompt), "<audio ") {
+			tags = append(tags, numberedH3Tags("Audio", count)...)
+		}
+		if len(tags) > 0 {
+			inputs["prompt"] = strings.Join(tags, " ") + " " + prompt
+		}
+		return
+	}
+}
+
+// H3SaveVideo selects NVENC for an explicit h264 codec. The cloud image
+// exposes CUDA but not the NVENC device, so auto lets the node fall back to
+// its CPU libx264 encoder. This also repairs workflows saved before the fix.
+func normalizeMiniMaxH3VideoOutput(workflow jsonMap) {
+	for _, raw := range workflow {
+		node, ok := mapValue(raw)
+		if !ok || stringValue(node["class_type"]) != "H3SaveVideo" {
+			continue
+		}
+		inputs, ok := mapValue(node["inputs"])
+		if ok && strings.EqualFold(stringValue(inputs["codec"]), "h264") {
+			inputs["codec"] = "auto"
+		}
+	}
+}
+
+func activeH3ReferenceSlots(inputs jsonMap, prefix string) int {
+	count := 0
+	for name, value := range inputs {
+		if strings.HasPrefix(name, prefix) && isWorkflowLink(value) {
+			count++
+		}
+	}
+	return count
+}
+
+func numberedH3Tags(label string, count int) []string {
+	result := make([]string, 0, count)
+	for index := 1; index <= count; index++ {
+		result = append(result, fmt.Sprintf("<%s %d>", label, index))
+	}
+	return result
 }
 
 func normalizedWorkflowFieldSource(field jsonMap) string {

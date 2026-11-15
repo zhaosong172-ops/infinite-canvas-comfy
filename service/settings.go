@@ -11,8 +11,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -403,6 +403,27 @@ func buildOpenAIModelChannelURL(channel model.ModelChannel, path string) string 
 	lowerBaseURL := strings.ToLower(baseURL)
 	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") && !strings.HasSuffix(lowerBaseURL, "/api/paas/v4") {
 		baseURL += "/v1"
+	}
+	return baseURL + path
+}
+
+func buildAAChannelURL(channel model.ModelChannel, path string) string {
+	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
+	lowerBaseURL := strings.ToLower(baseURL)
+	for _, endpoint := range []string{"/chat/completions", "/models"} {
+		if strings.HasSuffix(lowerBaseURL, endpoint) {
+			baseURL = baseURL[:len(baseURL)-len(endpoint)]
+			lowerBaseURL = strings.ToLower(baseURL)
+			break
+		}
+	}
+	switch {
+	case strings.HasSuffix(lowerBaseURL, "/api/v1"):
+	case strings.HasSuffix(lowerBaseURL, "/api"):
+		baseURL += "/v1"
+	case strings.HasSuffix(lowerBaseURL, "/v1"):
+	default:
+		baseURL += "/api/v1"
 	}
 	return baseURL + path
 }

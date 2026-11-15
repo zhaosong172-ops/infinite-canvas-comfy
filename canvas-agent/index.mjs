@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import express from "express";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { openComfyTunnel } from "./comfy-ssh.mjs";
 import { dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,7 +13,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { CodexClient } from "./codex.mjs";
 
 const entry = fileURLToPath(import.meta.url);
-const configPath = resolve(homedir(), ".infinite-canvas", "codex-agent.json");
+const configPath = process.env.CANVAS_AGENT_CONFIG || resolve(homedir(), ".infinite-canvas", "codex-agent.json");
 const readConfig = () => existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : null;
 const savedConfig = readConfig();
 const serviceId = savedConfig?.serviceId || randomUUID();
@@ -25,6 +27,7 @@ const endpoint = "http://127.0.0.1:" + port;
 const workspace = dirname(entry);
 const origins = new Set(process.env.CANVAS_AGENT_ORIGINS?.split(",").map((value) => value.trim()).filter(Boolean) || savedConfig?.origins || []);
 const sessions = new Map();
+const comfyTunnels = new Map();
 const methods = new Set(["model/list", "thread/start", "thread/resume", "thread/archive", "turn/start", "turn/interrupt", "bridge/stop"]);
 
 async function openCanvas() {
@@ -191,6 +194,34 @@ async function startMcp() {
     await server.connect(new StdioServerTransport());
 }
 
+
+function normalizeComfyUrl(value) {
+    let url;
+    try { url = new URL(String(value || "")); } catch { throw new Error("ComfyUI 服务地址无效"); }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("ComfyUI 地址必须是有效的 HTTP(S) 地址");
+    return url.href.replace(/\/+$/, "");
+}
+
+async function readComfyJson(baseUrl, route, apiKey) {
+    const response = await fetch(baseUrl + route, {
+        headers: { Accept: "application/json", ...(apiKey ? { Authorization: "Bearer " + apiKey } : {}) },
+        redirect: "error",
+        signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) throw new Error("ComfyUI 请求失败（HTTP " + response.status + "）");
+    try { return await response.json(); } catch { throw new Error("ComfyUI 返回了无效 JSON"); }
+}
+
+function validPort(value, fallback, label) {
+    const port = value === undefined || value === "" ? fallback : Number(value);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(label + "端口无效");
+    return port;
+}
+
+function listComfyTunnels() {
+    return [...comfyTunnels.values()].map(({ id, host, user, localPort, remoteHost, remotePort }) => ({ id, host, user, localPort, remoteHost, remotePort, baseUrl: "http://127.0.0.1:" + localPort }));
+}
+
 function startHttp() {
     const app = express();
     app.use((req, res, next) => {
@@ -201,7 +232,7 @@ function startHttp() {
             res.setHeader("Vary", "Origin");
             res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-canvas-agent-token");
             res.setHeader("Access-Control-Expose-Headers", "x-canvas-agent-generation");
-            res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
             res.setHeader("Access-Control-Allow-Private-Network", "true");
         }
         if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -215,6 +246,62 @@ function startHttp() {
         next();
     });
     app.use(express.json({ limit: "20mb" }));
+    app.post("/shutdown", (req, res) => {
+        res.json({ ok: true });
+        shutdown();
+    });
+    app.post("/comfy/status", async (req, res) => {
+        let baseUrl;
+        try { baseUrl = normalizeComfyUrl(req.body?.url); } catch (error) { return res.status(400).json({ error: error.message }); }
+        const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+        try {
+            const [stats, queue] = await Promise.all([
+                readComfyJson(baseUrl, "/system_stats", apiKey),
+                readComfyJson(baseUrl, "/queue", apiKey),
+            ]);
+            const running = Array.isArray(queue.queue_running) ? queue.queue_running : [];
+            const pending = Array.isArray(queue.queue_pending) ? queue.queue_pending : [];
+            res.json({ online: true, running: running.length, pending: pending.length, device: stats.system?.device_name || "" });
+        } catch (error) {
+            res.status(502).json({ error: error instanceof Error ? error.message : "无法连接 ComfyUI" });
+        }
+    });
+    app.get("/comfy/tunnels", (_req, res) => res.json(listComfyTunnels()));
+    app.post("/comfy/tunnels", async (req, res) => {
+        const { host, username, identityFile, remoteHost = "127.0.0.1" } = req.body || {};
+        let port, remotePort;
+        try {
+            port = validPort(req.body?.port, 22, "SSH ");
+            remotePort = validPort(req.body?.remotePort, 8188, "ComfyUI ");
+        } catch (error) { return res.status(400).json({ error: error.message }); }
+        const user = String(username || "").trim();
+        const sshHost = String(host || "").trim();
+        const targetHost = String(remoteHost || "").trim();
+        if (!/^[A-Za-z_][A-Za-z0-9._-]{0,63}$/.test(user)) return res.status(400).json({ error: "SSH 用户名格式无效" });
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/.test(sshHost)) return res.status(400).json({ error: "SSH 主机地址格式无效" });
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/.test(targetHost)) return res.status(400).json({ error: "远端 ComfyUI 主机格式无效" });
+        let keyPath = "";
+        if (identityFile) {
+            keyPath = String(identityFile).trim();
+            if (keyPath.startsWith("-") || !existsSync(keyPath)) return res.status(400).json({ error: "SSH 私钥文件不存在或路径无效" });
+        }
+        try {
+            const id = randomUUID();
+            const tunnel = await openComfyTunnel({ host: sshHost, port, username: user, identityFile: keyPath, remoteHost: targetHost, remotePort, password: typeof req.body.password === "string" ? req.body.password : "", passphrase: typeof req.body.passphrase === "string" ? req.body.passphrase : "" }, resolve(dirname(configPath), "comfy-known-hosts.json"));
+            comfyTunnels.set(id, { id, host: sshHost, user, localPort: tunnel.localPort, remoteHost: targetHost, remotePort, close: tunnel.close });
+            tunnel.onClose(() => comfyTunnels.delete(id));
+            res.json({ id, localPort: tunnel.localPort, baseUrl: "http://127.0.0.1:" + tunnel.localPort, fingerprint: tunnel.fingerprint });
+        } catch (error) {
+            res.status(502).json({ error: error instanceof Error ? error.message : "无法启动 SSH 隧道" });
+        }
+    });
+    app.delete("/comfy/tunnels/:id", (req, res) => {
+        const tunnel = comfyTunnels.get(req.params.id);
+        if (!tunnel) return res.json({ stopped: false });
+        tunnel.close();
+        comfyTunnels.delete(tunnel.id);
+        res.json({ stopped: true });
+    });
     app.post("/connect", (req, res) => {
         const { clientId, canvasId, tools } = req.body;
         if (typeof clientId !== "string" || !clientId || typeof canvasId !== "string" || !canvasId || !Array.isArray(tools)) {
@@ -298,6 +385,8 @@ function startHttp() {
     });
     function shutdown() {
         for (const session of sessions.values()) closeSession(session);
+        for (const tunnel of comfyTunnels.values()) tunnel.close();
+        comfyTunnels.clear();
         server.close();
     }
     process.on("SIGINT", shutdown);

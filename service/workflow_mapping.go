@@ -173,6 +173,14 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 	if source == "" && field.BindPrompt {
 		source = "prompt"
 	}
+	// Keep saved workflows compatible with the older UI, which stored this
+	// optional field as negativePrompt or negative_prompt. The image/video
+	// workflow endpoints do not always send a negative prompt, so an absent
+	// value must be treated as an omitted override rather than an error.
+	switch strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(source)) {
+	case "negativeprompt":
+		source = "negativePrompt"
+	}
 	if source == "" && field.SourceFromUpstream {
 		switch strings.ToLower(strings.TrimSpace(field.FieldType)) {
 		case "image", "img", "photo", "picture":
@@ -215,6 +223,10 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 		}
 	case "prompt":
 		value = input.Prompt
+	case "negativePrompt":
+		if input.FieldValues != nil {
+			value = input.FieldValues["source:negativePrompt"]
+		}
 	case "systemPrompt":
 		value = input.SystemPrompt
 	case "referenceImage", "referenceVideo", "referenceAudio", "mask":

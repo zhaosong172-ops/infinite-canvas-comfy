@@ -8,6 +8,7 @@ import { useAutoDLWorkflowNames } from "@/hooks/use-autodl-workflow";
 import { isWorkflowProtocol } from "@/lib/model-channel";
 import { cn } from "@/lib/utils";
 import type { WorkflowRef } from "@/lib/workflow-channel";
+import { fallbackComfyWorkflows } from "@/lib/comfy-builtins";
 import { filterModelsByCapability, normalizeLocalChannels, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -35,17 +36,23 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
     const userReady = useUserStore((state) => state.isReady);
     const publicSettings = useConfigStore((state) => state.publicSettings);
     const workflowEnabled = Boolean(onWorkflowChange && capability && capability !== "text");
+    const hasWorkflowChannel = config.channelMode === "remote"
+        ? config.publicChannels.some((channel) => isWorkflowProtocol(channel.protocol || ""))
+        : normalizeLocalChannels(config).some((channel) => isWorkflowProtocol(channel.protocol));
     const channelOptions = useMemo<PickerOption[]>(() => {
         const channels =
             config.channelMode === "remote"
                 ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
                 : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
-        const filtered = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => filterModelsByCapability(channel.models ?? [], capability, channel.protocol || "", channel.modelCapabilities).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model })));
-        if (!workflowEnabled || !token) return filtered;
+        const filtered = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => filterModelsByCapability(channel.models ?? [], capability, channel.protocol || "", channel.modelCapabilities).map((model) => ({ key: channel.id + "::" + model, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model })));
+        if (!workflowEnabled || (config.channelMode === "remote" && !token)) return filtered;
         const scope = config.channelMode === "remote" ? "system" : "personal";
-        return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol).map((entry) => {
-            const ref: WorkflowRef = { scope, channelId: channel.id || "", kind: entry.kind, workflowId: entry.workflowId };
-            return { key: `workflow:${JSON.stringify([ref.scope, ref.channelId, ref.kind, ref.workflowId])}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model: "", workflowRef: ref, label: entry.title || entry.workflowId };
+        return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? [
+            ...channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol),
+            ...(channel.protocol === "comfyui" ? fallbackComfyWorkflows.filter((entry) => entry.capability === capability && !channel.workflows.some((saved) => saved.workflowId === entry.workflowId)) : []),
+        ].map((entry) => {
+            const ref: WorkflowRef = { scope, channelId: channel.id || "", kind: "workflow", workflowId: entry.workflowId };
+            return { key: "workflow:" + JSON.stringify([ref.scope, ref.channelId, ref.kind, ref.workflowId]), channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model: "", workflowRef: ref, label: entry.title || entry.workflowId };
         }) : [])];
     }, [capability, config, token, workflowEnabled]);
     const modelLabel = useAutoDLWorkflowNames(channelOptions);
@@ -84,7 +91,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
             open={open}
             value={current ? currentValue : ""}
             onOpenChange={(nextOpen) => {
-                if (nextOpen && !options.length && config.channelMode === "local") {
+                if (nextOpen && !options.length && config.channelMode === "local" && !hasWorkflowChannel) {
                     onMissingConfig?.();
                     return;
                 }
@@ -130,7 +137,11 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
                     ))
                 ) : (
                     <SelectItem value="__empty__" disabled>
-                        {config.channelMode === "remote" ? "暂无可用模型" : "请先到配置里拉取模型列表"}
+                        {hasWorkflowChannel
+                            ? config.channelMode === "remote"
+                                ? "暂无已公开工作流"
+                                : "ComfyUI 已连接，但尚无可选工作流。请导入 API JSON、拉取参数并启用；模型文件名不能直接生成。"
+                            : config.channelMode === "remote" ? "暂无可用模型" : "请先到配置里添加渠道并拉取模型"}
                     </SelectItem>
                 )}
             </SelectContent>

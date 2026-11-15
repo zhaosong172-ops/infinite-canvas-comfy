@@ -9,12 +9,15 @@ import (
 )
 
 const (
-	ModelChannelProtocolOpenAI   = "openai"
-	ModelChannelProtocolGrok2API = "grok2api"
-	ModelChannelProtocolAPIMart  = "apimart"
-	ModelChannelProtocolKIE      = "kie"
-	ModelChannelProtocolAutoDL   = "autodl"
-	ModelChannelProtocolArk      = "ark"
+	ModelChannelProtocolOpenAI     = "openai"
+	ModelChannelProtocolDeepSeek   = "deepseek"
+	ModelChannelProtocolGRSAI      = "grsai"
+	ModelChannelProtocolAA         = "aa"
+	ModelChannelProtocolGrok2API   = "grok2api"
+	ModelChannelProtocolAPIMart    = "apimart"
+	ModelChannelProtocolKIE        = "kie"
+	ModelChannelProtocolAutoDL     = "autodl"
+	ModelChannelProtocolArk        = "ark"
 	ModelChannelProtocolTokenDance = "tokendance"
 )
 
@@ -31,7 +34,7 @@ type modelProtocolRule struct {
 }
 
 var modelProtocolRegistry map[string]modelProtocolAdapter
-var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocolAutoDL, ModelChannelProtocolArk, ModelChannelProtocolTokenDance}
+var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolDeepSeek, ModelChannelProtocolGRSAI, ModelChannelProtocolAA, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocolAutoDL, ModelChannelProtocolArk, ModelChannelProtocolTokenDance}
 
 func init() {
 	compatible := modelProtocolAdapter{
@@ -42,7 +45,7 @@ func init() {
 		models:    fetchOpenAIAdminChannelModels,
 		testModel: testOpenAIChannelModel,
 	}
-	modelProtocolRegistry = make(map[string]modelProtocolAdapter, 11)
+	modelProtocolRegistry = make(map[string]modelProtocolAdapter, len(modelProtocolIDs))
 	for _, id := range modelProtocolIDs {
 		modelProtocolRegistry[id] = compatible
 	}
@@ -110,6 +113,9 @@ func init() {
 	ark := compatible
 	ark.testModel = testArkSeedanceChannelModel
 	modelProtocolRegistry[ModelChannelProtocolArk] = ark
+	aa := compatible
+	aa.buildURL = buildAAChannelURL
+	modelProtocolRegistry[ModelChannelProtocolAA] = aa
 	tokenDance := compatible
 	tokenDance.buildURL = BuildTokenDanceChannelURL
 	modelProtocolRegistry[ModelChannelProtocolTokenDance] = tokenDance

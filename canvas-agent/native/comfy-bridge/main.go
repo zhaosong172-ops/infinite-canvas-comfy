@@ -21,11 +21,14 @@ import (
 
 type jsonMap map[string]any
 
+const remoteWorkflowPrefix = "comfy-template:"
+
 type bridgeOptions struct {
 	Server      string `json:"server"`
 	Token       string `json:"token"`
 	Comfy       string `json:"comfy"`
 	WorkflowDir string `json:"workflowDir"`
+	OutputPort  int    `json:"outputPort"`
 }
 
 type bridgeRequest struct {
@@ -115,6 +118,13 @@ func parseOptions(args []string) (bridgeOptions, error) {
 	if raw := value("--workflow-dir"); raw != "" {
 		options.WorkflowDir = raw
 	}
+	if raw := value("--output-port"); raw != "" {
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 0 || port > 65535 {
+			return options, errors.New("Bridge 本地结果端口无效")
+		}
+		options.OutputPort = port
+	}
 	if options.Comfy == "" {
 		options.Comfy = "http://127.0.0.1:8188"
 	}
@@ -134,6 +144,9 @@ func parseOptions(args []string) (bridgeOptions, error) {
 }
 
 func bridgeOptionsPath() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv("COMFY_BRIDGE_CONFIG_DIR")); dir != "" {
+		return filepath.Join(dir, "comfy-bridge.json"), nil
+	}
 	if runtime.GOOS == "windows" {
 		base := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 		if base == "" {
@@ -284,7 +297,7 @@ func executeInspectRequest(options bridgeOptions, request bridgeRequest) {
 }
 
 func inspectWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap) (jsonMap, error) {
-	source, err := loadWorkflowSource(options, payload)
+	source, err := loadWorkflowSource(ctx, options, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +307,9 @@ func inspectWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap
 	}
 	if !isComfyAPIWorkflow(workflow) {
 		return nil, errors.New("未找到可执行的 ComfyUI API 节点")
+	}
+	if err := adaptH3VideoOutput(ctx, options.Comfy, workflow); err != nil {
+		return nil, err
 	}
 	result := jsonMap{
 		"workflowJson": workflow,
@@ -336,6 +352,9 @@ func runComfyRequestFromCheckpoint(
 			return nil, err
 		}
 		if err := applyWorkflowFields(workflow, payload, files); err != nil {
+			return nil, err
+		}
+		if err := adaptH3VideoOutput(ctx, options.Comfy, workflow); err != nil {
 			return nil, err
 		}
 		stripCanvasAnnotationNodes(workflow)
@@ -391,12 +410,79 @@ func bridgeCapabilities(options bridgeOptions) (jsonMap, error) {
 	if err != nil {
 		return nil, err
 	}
-	return jsonMap{
+	remoteContext, cancelRemote := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelRemote()
+	remote, remoteErr := listRemoteWorkflowTemplates(remoteContext, options)
+	if remoteErr == nil {
+		workflows = append(workflows, remote...)
+	}
+	workflows = append(workflows, builtinWorkflowList()...)
+	sortWorkflowList(workflows)
+	capabilities := jsonMap{
 		"comfyUrl":    options.Comfy,
 		"workflowDir": workflowRoot(options),
 		"comfyOnline": checkComfyUI(options.Comfy),
 		"workflows":   workflows,
-	}, nil
+	}
+	if remoteErr != nil {
+		capabilities["remoteWorkflowError"] = remoteErr.Error()
+	}
+	return capabilities, nil
+}
+
+func listRemoteWorkflowTemplates(ctx context.Context, options bridgeOptions) ([]jsonMap, error) {
+	var catalog jsonMap
+	endpoint := strings.TrimRight(options.Comfy, "/") + "/workflow_templates"
+	if err := requestComfyJSONContext(ctx, http.MethodGet, endpoint, nil, &catalog); err != nil {
+		return nil, err
+	}
+	items := make([]jsonMap, 0)
+	for category, rawNames := range catalog {
+		names, ok := rawNames.([]any)
+		if !ok {
+			continue
+		}
+		for _, rawName := range names {
+			name := strings.TrimSpace(stringValue(rawName))
+			if !validRemoteWorkflowPart(category) || !validRemoteWorkflowPart(name) {
+				continue
+			}
+			items = append(items, jsonMap{
+				"workflowId": remoteWorkflowPrefix + category + "/" + name,
+				"title":      name + "（云端模板）",
+				"source":     "remote-template",
+				"category":   category,
+			})
+		}
+	}
+	return items, nil
+}
+
+func validRemoteWorkflowPart(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, "/\\") {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func loadRemoteWorkflowTemplate(ctx context.Context, options bridgeOptions, reference string) (jsonMap, error) {
+	parts := strings.SplitN(strings.Trim(reference, "/"), "/", 2)
+	if len(parts) != 2 || !validRemoteWorkflowPart(parts[0]) || !validRemoteWorkflowPart(parts[1]) {
+		return nil, errors.New("云端工作流模板 ID 无效")
+	}
+	category, name := parts[0], parts[1]
+	endpoint := strings.TrimRight(options.Comfy, "/") + "/api/workflow_templates/" + url.PathEscape(category) + "/" + url.PathEscape(name) + ".json"
+	var source jsonMap
+	if err := requestComfyJSONContext(ctx, http.MethodGet, endpoint, nil, &source); err != nil {
+		return nil, fmt.Errorf("读取云端工作流模板失败：%w", err)
+	}
+	return unwrapWorkflow(source), nil
 }
 
 func workflowRoot(options bridgeOptions) string {
@@ -450,20 +536,26 @@ func isComfyAPIWorkflow(workflow jsonMap) bool {
 }
 
 func loadWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap) (jsonMap, error) {
-	source, err := loadWorkflowSource(options, payload)
+	source, err := loadWorkflowSource(ctx, options, payload)
 	if err != nil {
 		return nil, err
 	}
 	return normalizeWorkflow(ctx, options.Comfy, source)
 }
 
-func loadWorkflowSource(options bridgeOptions, payload jsonMap) (jsonMap, error) {
+func loadWorkflowSource(ctx context.Context, options bridgeOptions, payload jsonMap) (jsonMap, error) {
 	if raw, ok := mapValue(payload["workflowJson"]); ok && len(raw) > 0 {
 		return cloneMap(unwrapWorkflow(raw))
 	}
 	workflowID := strings.TrimSpace(stringValue(payload["workflowId"]))
 	if workflowID == "" {
 		return nil, errors.New("任务没有 workflowJson 或 workflowId")
+	}
+	if strings.HasPrefix(workflowID, remoteWorkflowPrefix) {
+		return loadRemoteWorkflowTemplate(ctx, options, strings.TrimPrefix(workflowID, remoteWorkflowPrefix))
+	}
+	if strings.HasPrefix(workflowID, builtinWorkflowPrefix) {
+		return inspectBuiltinWorkflow(ctx, options.Comfy, strings.TrimPrefix(workflowID, builtinWorkflowPrefix))
 	}
 	if !strings.HasSuffix(strings.ToLower(workflowID), ".json") {
 		workflowID += ".json"
@@ -542,6 +634,71 @@ func unwrapWorkflow(value jsonMap) jsonMap {
 		break
 	}
 	return current
+}
+
+// adaptH3VideoOutput replaces the H3 custom encoder with VideoHelperSuite's
+// CPU ffmpeg encoder when the remote image provides it. The cloud GPU exposes
+// CUDA but not NVENC, so H3SaveVideo otherwise fails at avcodec_open2.
+func adaptH3VideoOutput(ctx context.Context, comfy string, workflow jsonMap) error {
+	needsAdapter := false
+	for _, raw := range workflow {
+		node, ok := mapValue(raw)
+		if ok && stringValue(node["class_type"]) == "H3SaveVideo" {
+			needsAdapter = true
+			break
+		}
+	}
+	if !needsAdapter {
+		return nil
+	}
+	var info jsonMap
+	if err := requestComfyJSONContext(ctx, http.MethodGet, strings.TrimRight(comfy, "/")+"/object_info", nil, &info); err != nil {
+		return fmt.Errorf("检查 H3 视频输出编码器失败：%w", err)
+	}
+	if _, ok := mapValue(info["VHS_VideoCombine"]); !ok {
+		normalizeMiniMaxH3VideoOutput(workflow)
+		return nil
+	}
+	for nodeID, raw := range workflow {
+		node, ok := mapValue(raw)
+		if !ok || stringValue(node["class_type"]) != "H3SaveVideo" {
+			continue
+		}
+		oldInputs, _ := mapValue(node["inputs"])
+		inputs := jsonMap{
+			"images":          oldInputs["images"],
+			"frame_rate":      firstValue(oldInputs["fps"], 24),
+			"loop_count":      0,
+			"filename_prefix": firstValue(oldInputs["filename_prefix"], "InfiniteCanvas/H3"),
+			"format":          "video/h264-mp4",
+			"pix_fmt":         "yuv420p",
+			"crf":             h3VideoCRF(stringValue(oldInputs["quality"])),
+			"save_metadata":   false,
+			"trim_to_audio":   false,
+			"pingpong":        false,
+			"save_output":     true,
+		}
+		if audio := oldInputs["audio"]; audio != nil {
+			inputs["audio"] = audio
+		}
+		replacement := jsonMap{"class_type": "VHS_VideoCombine", "inputs": inputs}
+		if meta, ok := mapValue(node["_meta"]); ok {
+			replacement["_meta"] = meta
+		}
+		workflow[nodeID] = replacement
+	}
+	return nil
+}
+
+func h3VideoCRF(quality string) int {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "max":
+		return 14
+	case "archive":
+		return 10
+	default:
+		return 18
+	}
 }
 
 func submitPrompt(
@@ -696,7 +853,11 @@ func requestComfyJSONContext(
 	body any,
 	target any,
 ) error {
-	return requestJSONContext(ctx, comfyHTTP, method, endpoint, body, target, nil)
+	return requestJSONContext(ctx, comfyHTTP, method, endpoint, body, target, func(request *http.Request) {
+		if apiKey := strings.TrimSpace(os.Getenv("COMFY_API_KEY")); apiKey != "" {
+			request.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+	})
 }
 
 func requestJSONContext(
@@ -774,7 +935,14 @@ func requestJSONContext(
 
 func checkComfyUI(comfy string) bool {
 	client := &http.Client{Timeout: 5 * time.Second}
-	response, err := client.Get(comfy + "/system_stats")
+	request, err := http.NewRequest(http.MethodGet, comfy+"/system_stats", nil)
+	if err != nil {
+		return false
+	}
+	if apiKey := strings.TrimSpace(os.Getenv("COMFY_API_KEY")); apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return false
 	}

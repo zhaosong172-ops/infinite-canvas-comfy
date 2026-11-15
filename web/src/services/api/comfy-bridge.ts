@@ -11,7 +11,8 @@ export type ComfyBridgeSummary = {
         comfyOnline?: boolean;
         comfyUrl?: string;
         workflowDir?: string;
-        workflows?: Array<{ workflowId: string; title?: string }>;
+        workflows?: Array<{ workflowId: string; title?: string; source?: "local" | "remote-template" | "builtin"; category?: string; capability?: WorkflowCapability }>;
+        remoteWorkflowError?: string;
     };
 };
 
@@ -19,7 +20,7 @@ export type ComfyBridgeRegistration = { bridge: ComfyBridgeSummary; token: strin
 export type ComfyBridgeInspectInput = { bridgeId: string; workflowId: string; workflowJson?: Record<string, unknown>; capability: WorkflowCapability };
 export type ComfyBridgeInspectResult = { workflowJson: Record<string, unknown>; workflowGraph?: WorkflowGraphPreview; fields: WorkflowFieldMapping[] };
 
-const bridgePath = (admin: boolean) => admin ? "/api/admin/comfy-bridges" : "/api/v1/comfy-bridges";
+const bridgePath = (admin: boolean) => (admin ? "/api/admin/comfy-bridges" : "/api/v1/comfy-bridges");
 
 export function listComfyBridges(token: string, admin = false) {
     return apiGet<ComfyBridgeSummary[]>(bridgePath(admin), undefined, token);

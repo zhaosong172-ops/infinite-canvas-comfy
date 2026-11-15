@@ -89,12 +89,22 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 	if resolved.Channel.Protocol == "comfyui" {
 		payload := comfyWorkflowPayload(resolved.Entry, input, overrides)
 		encoded, _ := json.Marshal(payload)
-		logInput.RequestBody = string(workflowLogJSON(string(encoded), ""))
+		logInput.RequestBody = string(workflowLogJSON(string(encoded), resolved.Channel.APIKey))
+		// A Bridge is still supported for remote/server deployments. For the
+		// personal desktop channel, call the configured ComfyUI URL directly so
+		// a connected cloud instance can actually produce media.
+		if strings.TrimSpace(resolved.Channel.BridgeID) == "" {
+			if strings.TrimSpace(resolved.Channel.ComfyURL) == "" {
+				return WorkflowTaskResult{}, errors.Join(errors.New("ComfyUI 地址未配置"), finishWorkflowTask(taskID, "failed", nil, "ComfyUI 地址未配置", nil))
+			}
+			go directComfyWorkflow(context.Background(), taskID, user.ID, resolved.Channel, resolved.Entry, input, overrides)
+			return WorkflowTaskResult{ID: taskID, Status: "queued", Progress: 0}, nil
+		}
 		request, queueErr := QueueComfyBridge(resolved.OwnerScope, resolved.OwnerID, resolved.Channel.BridgeID, taskID, resolved.Entry.Capability, payload)
 		if queueErr != nil {
 			return WorkflowTaskResult{}, errors.Join(queueErr, finishWorkflowTask(taskID, "failed", nil, queueErr.Error(), nil))
 		}
-		logInput.RequestBody = string(workflowLogJSON(request.PayloadJSON, ""))
+		logInput.RequestBody = string(workflowLogJSON(request.PayloadJSON, resolved.Channel.APIKey))
 		return WorkflowTaskResult{ID: taskID, Status: "queued", Progress: 0}, nil
 	}
 	upstreamID, err := SubmitRunningHubTask(ctx, resolved.Channel, resolved.Entry, input, overrides, &logInput)
