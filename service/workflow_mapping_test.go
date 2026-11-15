@@ -235,3 +235,126 @@ func TestWorkflowResultURLs(t *testing.T) {
 		t.Fatalf("Bridge 结果解析错误，urls=%#v err=%v", urls, err)
 	}
 }
+
+func TestQwenReferenceResolutionDoesNotUseCanvasSize(t *testing.T) {
+	enabled := true
+	for _, capability := range []string{"image", "video"} {
+		for _, source := range []string{"size", "resolution", "vquality"} {
+			entry := model.WorkflowEntry{Capability: capability, Fields: []model.WorkflowFieldMapping{{NodeID: "4", FieldName: "resolution", FieldType: "NUMBER", Source: source, Enabled: &enabled}}, WorkflowJSON: map[string]any{"4": map[string]any{"class_type": "TextEncodeQwenImage21", "inputs": map[string]any{"resolution": float64(1024)}}}}
+			for _, size := range []string{"16:9-2k", "9:16-2k", "1:1-4k"} {
+				values, err := ResolveWorkflowFields(entry, WorkflowRunInput{Size: size, VideoQuality: "720p"})
+				if err != nil || len(values) != 1 || values[0].Value != float64(1024) {
+					t.Fatalf("%s %s %s: values=%#v err=%v", capability, source, size, values, err)
+				}
+			}
+			values, err := ResolveWorkflowFields(entry, WorkflowRunInput{Size: "16:9-2k", FieldValues: map[string]any{"field:4:resolution": 512}})
+			if err != nil || len(values) != 1 || values[0].Value != float64(512) {
+				t.Fatalf("explicit numeric value lost: values=%#v err=%v", values, err)
+			}
+		}
+	}
+}
+
+func TestNumericVideoDurationAndResolution(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Capability: "video", Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "duration", FieldType: "INT", Source: "videoSeconds", Enabled: &enabled},
+		{NodeID: "2", FieldName: "resolution", FieldType: "NUMBER", Source: "vquality", Enabled: &enabled},
+	}}
+	for _, seconds := range []string{"5", "5s", "5秒"} {
+		values, err := ResolveWorkflowFields(entry, WorkflowRunInput{VideoSeconds: seconds, VideoQuality: "720p"})
+		if err != nil || len(values) != 2 || values[0].Value != int64(5) || values[1].Value != float64(720) {
+			t.Fatalf("%s: values=%#v err=%v", seconds, values, err)
+		}
+	}
+}
+
+func TestBuiltinImageCanvasDimensions(t *testing.T) {
+	for _, id := range []string{"builtin:anima", "builtin:moss", "builtin:qwen21"} {
+		for _, tc := range []struct {
+			size          string
+			width, height int64
+		}{{"16:9-2k", 2048, 1152}, {"9:16-2k", 1152, 2048}, {"1:1-4k", 3840, 3840}} {
+			t.Run(id+"/"+tc.size, func(t *testing.T) {
+				entry, _ := directBuiltinWorkflow(id)
+				input := WorkflowRunInput{Prompt: "test", Size: tc.size, Count: 1}
+				prepared := prepareBuiltinWorkflowParameters(entry, input)
+				overrides, err := ResolveWorkflowFields(prepared, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				latent := "6"
+				if id == "builtin:qwen21" {
+					latent = "canvas_output_latent"
+				}
+				got := map[string]any{}
+				for _, o := range overrides {
+					if o.NodeID == latent {
+						got[o.FieldName] = o.Value
+					}
+				}
+				if got["width"] != tc.width || got["height"] != tc.height || got["batch_size"] != int64(1) {
+					t.Fatalf("got %#v", got)
+				}
+				if _, ok := entry.WorkflowJSON["canvas_output_latent"]; ok {
+					t.Fatal("original modified")
+				}
+				if err := directComfyApplyOverrides(prepared.WorkflowJSON, overrides); err != nil {
+					t.Fatal(err)
+				}
+				inputs := prepared.WorkflowJSON[latent].(map[string]any)["inputs"].(map[string]any)
+				if inputs["width"] != tc.width || inputs["height"] != tc.height {
+					t.Fatalf("submitted inputs %#v", inputs)
+				}
+				payload := comfyWorkflowPayload(prepared, input, overrides)
+				if len(payload["workflowOverrides"].([]WorkflowOverride)) != len(overrides) {
+					t.Fatal("bridge overrides missing")
+				}
+			})
+		}
+	}
+}
+
+func TestBuiltinQwenReferencesKeepOriginalLatent(t *testing.T) {
+	entry, _ := directBuiltinWorkflow("builtin:qwen21")
+	prepared := prepareBuiltinWorkflowParameters(entry, WorkflowRunInput{ReferenceImages: []string{"data:image/png;base64,AQ=="}})
+	if _, ok := prepared.WorkflowJSON["canvas_output_latent"]; ok {
+		t.Fatal("reference latent replaced")
+	}
+	inputs := prepared.WorkflowJSON["7"].(map[string]any)["inputs"].(map[string]any)
+	link := inputs["latent_image"].([]any)
+	if link[0] != "4" || link[1] != float64(2) {
+		t.Fatalf("unexpected latent link: %#v", link)
+	}
+}
+
+func TestBuiltinH3CanvasDimensionsAndDuration(t *testing.T) {
+	entry := model.WorkflowEntry{Provider: "comfyui", WorkflowID: "builtin:h3-ref", Capability: "video", WorkflowJSON: map[string]any{"5": map[string]any{"class_type": "MiniMaxH3ReferenceToVideo", "inputs": map[string]any{"width": 736, "height": 1280, "length": 243}}}}
+	for _, tc := range []struct {
+		size, seconds         string
+		width, height, length int64
+	}{
+		{"16:9", "5s", 1280, 736, 124}, {"9:16", "10秒", 736, 1280, 243}, {"1:1", "5", 736, 736, 124},
+	} {
+		input := WorkflowRunInput{Size: tc.size, VideoQuality: "720p", VideoSeconds: tc.seconds}
+		prepared := prepareBuiltinWorkflowParameters(entry, input)
+		overrides, err := ResolveWorkflowFields(prepared, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]any{}
+		for _, o := range overrides {
+			got[o.FieldName] = o.Value
+		}
+		if got["width"] != tc.width || got["height"] != tc.height || got["length"] != tc.length {
+			t.Fatalf("%s %s: %#v", tc.size, tc.seconds, got)
+		}
+		if err := directComfyApplyOverrides(prepared.WorkflowJSON, overrides); err != nil {
+			t.Fatal(err)
+		}
+		inputs := prepared.WorkflowJSON["5"].(map[string]any)["inputs"].(map[string]any)
+		if inputs["length"] != tc.length {
+			t.Fatalf("submitted inputs %#v", inputs)
+		}
+	}
+}

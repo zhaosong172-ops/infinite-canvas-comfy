@@ -50,3 +50,78 @@ func directBuiltinFields(entry model.WorkflowEntry) []model.WorkflowFieldMapping
 	}
 	return []model.WorkflowFieldMapping{{NodeID: "4", FieldName: "text", Source: "prompt", Role: "prompt", BindPrompt: true, Enabled: &enabled}, {NodeID: "5", FieldName: "text", Source: "negativePrompt", Role: "business", Enabled: &enabled}}
 }
+
+// Prepare only our own builtins; imported workflows retain their mappings and links.
+func prepareBuiltinWorkflowParameters(entry model.WorkflowEntry, input WorkflowRunInput) model.WorkflowEntry {
+	if entry.Provider != "comfyui" || len(entry.WorkflowJSON) == 0 {
+		return entry
+	}
+	switch entry.WorkflowID {
+	case "builtin:anima", "builtin:moss", "builtin:qwen21", "builtin:h3-ref":
+	default:
+		return entry
+	}
+	workflow, err := directComfyWorkflowJSON(entry.WorkflowJSON)
+	if err != nil {
+		return entry
+	}
+	entry.WorkflowJSON = workflow
+	entry.Fields = append([]model.WorkflowFieldMapping(nil), entry.Fields...)
+	setField := func(nodeID, name, source string) {
+		for i := range entry.Fields {
+			field := &entry.Fields[i]
+			if field.NodeID == nodeID && field.FieldName == name {
+				if field.Source == "" || field.SourceAutomatic != nil && *field.SourceAutomatic {
+					field.Source = source
+				}
+				return
+			}
+		}
+		entry.Fields = append(entry.Fields, model.WorkflowFieldMapping{NodeID: nodeID, FieldName: name, FieldType: "INT", Source: source})
+	}
+	if entry.WorkflowID == "builtin:h3-ref" {
+		for id, raw := range workflow {
+			node, ok := raw.(map[string]any)
+			if !ok || stringValue(node["class_type"]) != "MiniMaxH3ReferenceToVideo" {
+				continue
+			}
+			setField(id, "width", "width")
+			setField(id, "height", "height")
+			setField(id, "length", "videoSeconds")
+		}
+		return entry
+	}
+	if entry.WorkflowID == "builtin:qwen21" && len(input.ReferenceImages) == 0 {
+		for _, raw := range workflow {
+			node, ok := raw.(map[string]any)
+			if !ok || stringValue(node["class_type"]) != "KSampler" {
+				continue
+			}
+			inputs, _ := node["inputs"].(map[string]any)
+			link, ok := inputs["latent_image"].([]any)
+			if !ok || len(link) != 2 {
+				continue
+			}
+			encoder, ok := workflow[stringValue(link[0])].(map[string]any)
+			if !ok || stringValue(encoder["class_type"]) != "TextEncodeQwenImage21" || stringValue(link[1]) != "2" {
+				continue
+			}
+			id := "canvas_output_latent"
+			for workflow[id] != nil {
+				id += "_"
+			}
+			workflow[id] = map[string]any{"class_type": "EmptyLatentImage", "inputs": map[string]any{"width": 1024, "height": 1024, "batch_size": 1}}
+			inputs["latent_image"] = []any{id, 0}
+		}
+	}
+	for id, raw := range workflow {
+		node, ok := raw.(map[string]any)
+		if !ok || (stringValue(node["class_type"]) != "EmptyLatentImage" && stringValue(node["class_type"]) != "EmptyFlux2LatentImage") {
+			continue
+		}
+		setField(id, "width", "width")
+		setField(id, "height", "height")
+		setField(id, "batch_size", "count")
+	}
+	return entry
+}

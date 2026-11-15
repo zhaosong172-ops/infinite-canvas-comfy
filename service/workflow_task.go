@@ -34,6 +34,7 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 	if input.ExpectedCapability != resolved.Entry.Capability {
 		return WorkflowTaskResult{}, safeMessageError{message: "工作流用途与当前生成入口不匹配"}
 	}
+	resolved.Entry = prepareBuiltinWorkflowParameters(resolved.Entry, input)
 	overrides, err := ResolveWorkflowFields(resolved.Entry, input)
 	if err != nil {
 		return WorkflowTaskResult{}, safeMessageError{message: err.Error()}

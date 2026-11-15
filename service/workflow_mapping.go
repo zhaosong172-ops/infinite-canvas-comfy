@@ -94,6 +94,12 @@ func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([
 			if isWorkflowLinkValue(original) {
 				continue
 			}
+			if strings.EqualFold(stringValue(node["class_type"]), "TextEncodeQwenImage21") && strings.EqualFold(field.FieldName, "resolution") && (field.Source == "size" || field.Source == "resolution" || field.Source == "vquality") {
+				field.Source = ""
+				if workflowValueEmpty(firstWorkflowValue(field.FieldValue, field.Value, field.DefaultValue, field.Default)) {
+					field.FieldValue = original
+				}
+			}
 		}
 		value, present, err := workflowFieldValue(field, input, entry.Capability)
 		if err != nil {
@@ -104,6 +110,26 @@ func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([
 				return nil, fmt.Errorf("必填字段 %s 缺少值", identity)
 			}
 			continue
+		}
+		if entry.Provider == "comfyui" && entry.WorkflowID == "builtin:h3-ref" {
+			node, _ := entry.WorkflowJSON[field.NodeID].(map[string]any)
+			_, explicit := input.FieldValues["field:"+field.NodeID+":"+field.FieldName]
+			if stringValue(node["class_type"]) == "MiniMaxH3ReferenceToVideo" && !explicit {
+				switch {
+				case (field.FieldName == "width" && field.Source == "width") || (field.FieldName == "height" && field.Source == "height"):
+					pixels, parseErr := strconv.Atoi(fmt.Sprint(value))
+					if parseErr != nil || pixels <= 0 {
+						return nil, fmt.Errorf("字段 %s：视频尺寸无效", identity)
+					}
+					value = max(32, workflowRoundToStep(float64(pixels), 32))
+				case field.FieldName == "length" && field.Source == "videoSeconds":
+					seconds, parseErr := strconv.ParseFloat(normalizeWorkflowDurationToken(input.VideoSeconds), 64)
+					if parseErr != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 150 {
+						return nil, fmt.Errorf("字段 %s：视频时长无效", identity)
+					}
+					value = max(5, 5+workflowRoundToStep(seconds*24-5, 17))
+				}
+			}
 		}
 		if media, ok := value.(map[string]any); ok {
 			mediaID, _ := media["mediaId"].(string)
@@ -270,7 +296,9 @@ func workflowFieldValue(field model.WorkflowFieldMapping, input WorkflowRunInput
 		}
 		value = workflowDimensionPart(capability, input.Size, input.VideoQuality, index)
 	case "count":
-		value = input.Count
+		if input.Count > 0 {
+			value = input.Count
+		}
 	case "quality":
 		value = input.Quality
 	case "transparentBackground":
@@ -602,7 +630,7 @@ func workflowVideoFieldValue(field model.WorkflowFieldMapping, value string, nor
 		}
 		return raw
 	}
-	if numeric := workflowNumericResolutionValue(field, raw); numeric != nil {
+	if numeric := workflowNumericResolutionValue(field, normalize(raw)); numeric != nil {
 		return numeric
 	}
 	if fallback := workflowFieldConfiguredDefault(field); fallback != "" && !workflowResolutionShapeCompatible(fallback, raw) {
@@ -655,7 +683,7 @@ func workflowNumericResolutionValue(field model.WorkflowFieldMapping, raw string
 	min, minOK := workflowNumericBound(field.Min)
 	max, maxOK := workflowNumericBound(field.Max)
 	step, stepOK := workflowNumericBound(field.Step)
-	if !minOK && !maxOK && !stepOK && !strings.EqualFold(strings.TrimSpace(field.FieldType), "NUMBER") {
+	if !minOK && !maxOK && !stepOK && !strings.EqualFold(strings.TrimSpace(field.FieldType), "NUMBER") && !strings.EqualFold(strings.TrimSpace(field.FieldType), "INTEGER") && !strings.EqualFold(strings.TrimSpace(field.FieldType), "INT") && !strings.EqualFold(strings.TrimSpace(field.FieldType), "FLOAT") && !strings.EqualFold(strings.TrimSpace(field.FieldType), "SLIDER") {
 		return nil
 	}
 	value := *parsed
